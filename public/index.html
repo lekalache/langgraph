@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LangGraph - AI Chat Interface</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <h1>LangGraph AI</h1>
+            </div>
+            <div class="header-actions">
+                <select class="model-selector" id="modelSelector">
+                    <option value="">Loading models...</option>
+                </select>
+                <button class="btn-secondary" id="launchTerminal">
+                    Launch Terminal Demo
+                </button>
+                <button class="btn-secondary" id="clearChat">
+                    Clear Chat
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Welcome Screen -->
+            <div class="welcome-screen" id="welcomeScreen">
+                <div class="welcome-card">
+                    <div class="welcome-icon"></div>
+                    <h2>Welcome to LangGraph AI</h2>
+                    <p>Your intelligent conversational assistant powered by advanced language models</p>
+
+
+                    <button class="btn-primary start-chat" id="startChat">
+                        Start Chatting
+                    </button>
+                </div>
+            </div>
+
+            <!-- Chat Interface -->
+            <div class="chat-interface hidden" id="chatInterface">
+                <div class="messages" id="messages">
+                    <!-- Messages will be added here dynamically -->
+                </div>
+
+                <div class="input-container">
+                    <div class="input-wrapper">
+                        <textarea
+                            id="messageInput"
+                            placeholder="Type your message... (Shift+Enter for new line)"
+                            rows="1"
+                        ></textarea>
+                        <button class="btn-send" id="sendButton" disabled>
+                            Send
+                        </button>
+                    </div>
+                    <div class="input-footer">
+                        <span class="model-info" id="modelInfo">Loading...</span>
+                        <span class="connection-status" id="connectionStatus">
+                            <span class="status-dot"></span>
+                            <span id="statusText">Connecting...</span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast Notification -->
+    <div class="toast hidden" id="toast"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

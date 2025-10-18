@@ -1,0 +1,79 @@
+langgraph/
+│
+├── 📄 Configuration Files
+│   ├── package.json              # Dependencies and scripts
+│   ├── tsconfig.json             # TypeScript configuration
+│   ├── .env.example              # Environment template
+│   ├── .env                      # Your API keys (gitignored)
+│   └── .gitignore                # Git ignore rules
+│
+├── 📚 Documentation
+│   ├── README.md                 # Project overview & features
+│   ├── GETTING_STARTED.md        # Quick start guide (START HERE!)
+│   ├── USAGE.md                  # Detailed usage instructions
+│   ├── ARCHITECTURE.md           # System architecture docs
+│   └── PROJECT_STRUCTURE.txt     # This file
+│
+├── 💻 Source Code (src/)
+│   │
+│   ├── 🤖 Main Agent
+│   │   └── agent.ts              # Core agentic AI system
+│   │                             # - Orchestrates all components
+│   │                             # - Defines graph flow
+│   │                             # - Interactive CLI
+│   │
+│   ├── 🧠 Intelligence
+│   │   ├── reasoning.ts          # Planning & reasoning engine
+│   │   │                         # - createPlan()
+│   │   │                         # - analyze()
+│   │   │                         # - reflect()
+│   │   │                         # - decide()
+│   │   │
+│   │   └── memory.ts             # Conversation persistence
+│   │                             # - Checkpointing system
+│   │                             # - Thread management
+│   │                             # - State storage
+│   │
+│   ├── 🔧 Capabilities
+│   │   ├── tools.ts              # Agent tools
+│   │   │                         # - Calculator
+│   │   │                         # - Note-taking
+│   │   │                         # - Web search (mock)
+│   │   │                         # - Date/time
+│   │   │
+│   │   └── human-input.ts        # Human-in-the-loop
+│   │                             # - Interactive input
+│   │                             # - Confirmations
+│   │                             # - User prompts
+│   │
+│   └── 📖 Examples
+│       ├── examples.ts           # Automated demonstrations
+│       │                         # - Memory example
+│       │                         # - Tool use example
+│       │                         # - Planning example
+│       │                         # - Contextual conversation
+│       │
+│       └── index.ts              # Simple getting started example
+│
+└── 📦 Generated (after build)
+    └── dist/                     # Compiled JavaScript
+        └── ...
+
+QUICK START:
+1. npm install
+2. cp .env.example .env (add your OPENAI_API_KEY)
+3. npm run agent
+
+AVAILABLE COMMANDS:
+- npm run agent    → Interactive agent (recommended!)
+- npm run dev      → Run automated examples
+- npm run simple   → Simple chatbot example
+- npm run build    → Compile TypeScript
+- npm start        → Run compiled code
+
+FEATURES:
+✓ Memory & Persistence
+✓ Human-in-the-Loop
+✓ Reasoning & Planning
+✓ Tool Use (extensible)
+✓ Non-streaming Responses
