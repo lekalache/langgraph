@@ -4,10 +4,16 @@ import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
 import path from "path";
 import { ChatOpenAI } from "@langchain/openai";
-import { HumanMessage, AIMessage, BaseMessage } from "@langchain/core/messages";
+import { HumanMessage, AIMessage, BaseMessage, SystemMessage } from "@langchain/core/messages";
 import config from "../core/config";
 import { spawn } from "child_process";
 import { allTools } from "../core/tools";
+import {
+  createReACTPrompt,
+  parseReACTResponse,
+  executeReACTAction,
+  buildReACTHistory,
+} from "../core/react-agent";
 
 const app = express();
 const server = createServer(app);
@@ -19,8 +25,10 @@ const MAX_HISTORY_LENGTH = 50; // cap messages per session to prevent unbounded 
 
 // Determine if a model supports tool use via OpenRouter
 function modelSupportsTools(modelId: string): boolean {
-  // Many free OpenRouter routes do not support OpenAI tool calling.
-  // Default to false here; mark true only for known tool-capable, OpenAI-compatible routes.
+  // IMPORTANT: OpenRouter free models generally do NOT support tool calling
+  // Even if the underlying model supports it, OpenRouter's free tier doesn't enable it
+
+  // Explicitly unsupported models (free tier on OpenRouter)
   const unsupported = [
     "tngtech/deepseek-r1t2-chimera:free",
     "google/gemini-flash-1.5-8b:free",
@@ -29,8 +37,39 @@ function modelSupportsTools(modelId: string): boolean {
     "microsoft/phi-3-mini-128k-instruct:free",
     "qwen/qwen-2-7b-instruct:free",
   ];
+
   if (unsupported.includes(modelId)) return false;
-  // Add known tool-capable routes here if you enable them in the future.
+
+  // List of models known to support OpenAI-compatible tool calling on OpenRouter
+  const supported = [
+    // OpenAI models (paid, support tools)
+    "openai/gpt-4-turbo-preview",
+    "openai/gpt-4",
+    "openai/gpt-4o",
+    "openai/gpt-3.5-turbo",
+
+    // Anthropic Claude models (paid, support tools)
+    "anthropic/claude-3-opus",
+    "anthropic/claude-3-sonnet",
+    "anthropic/claude-3-haiku",
+    "anthropic/claude-3.5-sonnet",
+
+    // Google Gemini (paid, support tools)
+    "google/gemini-pro-1.5",
+    "google/gemini-pro",
+
+    // Mistral models (paid, support tools)
+    "mistralai/mistral-large",
+    "mistralai/mistral-medium",
+
+    // DeepSeek paid models (support tools via OpenRouter)
+    "deepseek/deepseek-chat",
+  ];
+
+  // Check if the model is in the supported list
+  if (supported.includes(modelId)) return true;
+
+  // Default to false for unknown models to avoid 404 errors
   return false;
 }
 
@@ -47,6 +86,15 @@ function createChatModel(modelId: string) {
 
 // Initialize AI model (tools only bound if supported)
 let model = createChatModel(config.models.agent);
+
+// Separate model for classification (without tools) to ensure clean JSON responses
+const classificationModel = new ChatOpenAI({
+  modelName: config.models.agent,
+  temperature: 0.7,
+  configuration: {
+    baseURL: config.api.baseURL,
+  },
+});
 
 /**
  * Classify request type using AI
@@ -67,7 +115,7 @@ Respond in this EXACT JSON format (no markdown, no extra text):
 {"type": "category_name", "reasoning": "brief explanation why"}`;
 
   try {
-    const response = await model.invoke([new HumanMessage(classificationPrompt)]);
+    const response = await classificationModel.invoke([new HumanMessage(classificationPrompt)]);
     const content = response.content.toString().trim();
 
     const jsonMatch = content.match(/\{[\s\S]*\}/);
@@ -117,7 +165,7 @@ Respond with ONLY a JSON array of steps (no markdown, no extra text):
 ["Step 1", "Step 2", "Step 3"]`;
 
   try {
-    const response = await model.invoke([new HumanMessage(planningPrompt)]);
+    const response = await classificationModel.invoke([new HumanMessage(planningPrompt)]);
     const content = response.content.toString().trim();
 
     const jsonMatch = content.match(/\[[\s\S]*\]/);
@@ -205,6 +253,88 @@ app.post("/api/models", express.json(), (req, res) => {
   res.json({ success: true, model: config.models.agent, supportsTools: modelSupportsTools(config.models.agent) });
 });
 
+// Export conversation as Markdown
+app.get("/api/export/:sessionId/markdown", (req, res) => {
+  const { sessionId } = req.params;
+  const history = sessions.get(sessionId);
+
+  if (!history || history.length === 0) {
+    return res.status(404).json({ error: "Session not found or empty" });
+  }
+
+  // Convert conversation to Markdown
+  let markdown = `# Conversation Export\n\n`;
+  markdown += `**Date**: ${new Date().toLocaleString()}\n`;
+  markdown += `**Session ID**: ${sessionId}\n`;
+  markdown += `**Model**: ${config.models.agent}\n\n`;
+  markdown += `---\n\n`;
+
+  history.forEach((msg, index) => {
+    const role = msg._getType();
+    const content = msg.content.toString();
+
+    if (role === "human") {
+      markdown += `### 👤 User\n\n${content}\n\n`;
+    } else if (role === "ai") {
+      markdown += `### 🤖 Assistant\n\n${content}\n\n`;
+    } else if (role === "system") {
+      // Skip system messages in export
+      return;
+    }
+  });
+
+  res.setHeader("Content-Type", "text/markdown");
+  res.setHeader("Content-Disposition", `attachment; filename="conversation-${sessionId}.md"`);
+  res.send(markdown);
+});
+
+// Export conversation as JSON
+app.get("/api/export/:sessionId/json", (req, res) => {
+  const { sessionId } = req.params;
+  const history = sessions.get(sessionId);
+
+  if (!history || history.length === 0) {
+    return res.status(404).json({ error: "Session not found or empty" });
+  }
+
+  const exportData = {
+    sessionId,
+    exportDate: new Date().toISOString(),
+    model: config.models.agent,
+    messageCount: history.length,
+    messages: history.map((msg, index) => ({
+      index,
+      role: msg._getType(),
+      content: msg.content.toString(),
+      timestamp: new Date().toISOString(), // Could be enhanced with actual timestamps
+    })).filter(msg => msg.role !== "system"), // Filter out system messages
+  };
+
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Content-Disposition", `attachment; filename="conversation-${sessionId}.json"`);
+  res.json(exportData);
+});
+
+// Get session stats
+app.get("/api/sessions/:sessionId/stats", (req, res) => {
+  const { sessionId } = req.params;
+  const history = sessions.get(sessionId);
+
+  if (!history) {
+    return res.status(404).json({ error: "Session not found" });
+  }
+
+  const stats = {
+    sessionId,
+    messageCount: history.length,
+    userMessages: history.filter(m => m._getType() === "human").length,
+    aiMessages: history.filter(m => m._getType() === "ai").length,
+    model: config.models.agent,
+  };
+
+  res.json(stats);
+});
+
 // Launch terminal demo endpoint
 app.post("/api/launch-terminal", (req, res) => {
   try {
@@ -254,16 +384,12 @@ wss.on("connection", (ws: WebSocket) => {
           content: "Analyzing request type..."
         }));
 
-        await new Promise(resolve => setTimeout(resolve, 300)); // Visual delay
-
         const classification = await classifyRequest(content);
 
         ws.send(JSON.stringify({
           type: "classification",
           classification: classification
         }));
-
-        await new Promise(resolve => setTimeout(resolve, 500));
 
         // STEP 2: Planning (for complex requests)
         const needsPlan = ['code', 'research', 'creative'].includes(classification.type);
@@ -276,41 +402,35 @@ wss.on("connection", (ws: WebSocket) => {
             content: "Creating execution plan..."
           }));
 
-          await new Promise(resolve => setTimeout(resolve, 300));
-
           plan = await createPlan(content, classification.type);
 
           if (plan.length > 0) {
+            // Display the plan to user (for transparency)
             ws.send(JSON.stringify({
               type: "plan",
               plan: plan
             }));
 
-            // Ask for confirmation
+            // Auto-proceed with execution (no confirmation needed)
             ws.send(JSON.stringify({
-              type: "confirmation-request",
-              message: "I've created a plan. Should I proceed?"
+              type: "agent-step",
+              step: "execution",
+              content: "Executing plan..."
             }));
-
-            // Wait for user confirmation (we'll handle this with a response)
-            return; // Wait for user to confirm
           }
         }
 
-        // STEP 3: Execution
+        // STEP 3: Execution (auto-approved)
         await executeResponse(ws, history, sessionId, classification, plan);
 
       } else if (msgType === "confirm") {
-        // User confirmed the plan, proceed with execution
-  const history = sessions.get(sessionId) || [];
-
+        // Legacy confirmation handler (no longer used with auto-approval)
+        // Kept for backwards compatibility
+        const history = sessions.get(sessionId) || [];
         ws.send(JSON.stringify({
-          type: "agent-step",
-          step: "execution",
-          content: "Executing plan..."
+          type: "info",
+          content: "Plans are now automatically approved. No confirmation needed."
         }));
-
-        await executeResponse(ws, history, sessionId, null, []);
 
       } else if (msgType === "clear") {
         sessions.set(sessionId, []);
@@ -331,6 +451,38 @@ wss.on("connection", (ws: WebSocket) => {
 });
 
 /**
+ * Get detailed progress message for tool execution
+ */
+function getToolProgressMessage(toolName: string, args: any): string {
+  switch (toolName) {
+    case "web_search":
+      return `Searching the web for: "${args.query}"...`;
+    case "browser_navigate":
+      return `Navigating to ${args.url}...`;
+    case "browser_extract":
+      return `Extracting content from ${args.url}...`;
+    case "calculator":
+      return `Calculating: ${args.expression}...`;
+    case "get_datetime":
+      return `Getting current date and time...`;
+    case "take_note":
+      return `Saving note: "${args.key}"...`;
+    case "get_note":
+      return `Retrieving note: "${args.key}"...`;
+    case "list_notes":
+      return `Listing all saved notes...`;
+    case "execute_code":
+      return `Executing JavaScript code...`;
+    case "read_file":
+      return `Reading file: "${args.filePath}"...`;
+    case "write_file":
+      return `Writing to file: "${args.filePath}"...`;
+    default:
+      return `Executing ${toolName}...`;
+  }
+}
+
+/**
  * Execute the actual response with streaming and tool calls
  */
 async function executeResponse(
@@ -341,107 +493,164 @@ async function executeResponse(
   plan: string[]
 ) {
   try {
+    // Add ReACT system prompt if this is a new conversation
+    if (history.length === 1) {
+      const reactPrompt = createReACTPrompt();
+      history.unshift(new SystemMessage(reactPrompt));
+    }
+
     ws.send(JSON.stringify({
       type: "agent-step",
       step: "thinking",
-      content: "Formulating response..."
+      content: "Analyzing request..."
     }));
 
-    await new Promise(resolve => setTimeout(resolve, 300));
+    const MAX_ITERATIONS = 10;
+    let iteration = 0;
 
-    // Get AI response
-    const response = await model.invoke(history);
+    // ReACT loop: continue until we get a Final Answer or hit max iterations
+    while (iteration < MAX_ITERATIONS) {
+      iteration++;
+      console.log(`\n=== ReACT Iteration ${iteration} ===`);
 
-  // If the current route supports tools and the model produced tool calls, handle them
-  if (modelSupportsTools(config.models.agent) && response.tool_calls && response.tool_calls.length > 0) {
-      // Add AI message with tool calls to history
-      history.push(response);
+      // Get AI response
+      const response = await model.invoke(history);
+      const responseText = response.content.toString();
 
-      // Execute each tool call
-      for (const toolCall of response.tool_calls) {
+      console.log("Model response:", responseText.substring(0, 300));
+
+      // Parse the ReACT response
+      const parsed = parseReACTResponse(responseText);
+
+      if (parsed.isDone && parsed.finalAnswer) {
+        // Model has provided final answer, stream it to user
+        console.log("Final answer received");
+
+        ws.send(JSON.stringify({ type: "stream-start" }));
+
+        // Stream the final answer in chunks (10 words at a time for better UX)
+        const words = parsed.finalAnswer.split(" ");
+        for (let i = 0; i < words.length; i += 10) {
+          const chunk = words.slice(i, i + 10).join(" ") + " ";
+          ws.send(JSON.stringify({
+            type: "stream-chunk",
+            content: chunk
+          }));
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+
+        ws.send(JSON.stringify({ type: "stream-end" }));
+
+        // Save to history
+        history.push(new AIMessage(responseText));
+        sessions.set(sessionId, history);
+        break;
+      }
+
+      if (parsed.action) {
+        // Model wants to use a tool
+        const { thought, action, actionInput } = parsed.action;
+
+        console.log(`Thought: ${thought}`);
+        console.log(`Action: ${action}`);
+        console.log(`Action Input:`, actionInput);
+
+        // Notify user of the tool call with detailed progress message
+        const progressMessage = getToolProgressMessage(action, actionInput);
         ws.send(JSON.stringify({
           type: "tool-call",
-          toolName: toolCall.name,
-          toolArgs: toolCall.args,
-          toolId: toolCall.id
+          toolName: action,
+          toolArgs: actionInput,
+          toolId: `react-${iteration}`
         }));
 
-        // Find and execute the tool
-        const tool = allTools.find(t => t.name === toolCall.name);
-        if (tool) {
-          try {
-            const toolResult = await tool.invoke(toolCall.args);
+        // Send progress indicator for long-running tools
+        ws.send(JSON.stringify({
+          type: "agent-step",
+          step: "executing",
+          content: progressMessage
+        }));
 
-            ws.send(JSON.stringify({
-              type: "tool-result",
-              toolName: toolCall.name,
-              result: toolResult,
-              toolId: toolCall.id
-            }));
+        // Execute the tool with timeout (30 seconds max)
+        try {
+          const toolPromise = executeReACTAction(parsed.action);
+          const timeoutPromise = new Promise<string>((_, reject) =>
+            setTimeout(() => reject(new Error(`Tool ${action} timed out after 30 seconds`)), 30000)
+          );
 
-            // Add tool result to history
-            history.push({
-              role: "tool",
-              content: toolResult,
-              tool_call_id: toolCall.id,
-            } as any);
+          const observation = await Promise.race([toolPromise, timeoutPromise]);
 
-          } catch (toolError: any) {
-            ws.send(JSON.stringify({
-              type: "tool-error",
-              toolName: toolCall.name,
-              error: toolError.message,
-              toolId: toolCall.id
-            }));
-          }
+          console.log(`Observation (${observation.length} chars):`, observation.substring(0, 200));
+
+          // Send tool result to user (increased from 500 to 2000 chars for better context)
+          ws.send(JSON.stringify({
+            type: "tool-result",
+            toolName: action,
+            result: observation.substring(0, 2000) + (observation.length > 2000 ? "..." : ""),
+            toolId: `react-${iteration}`
+          }));
+
+          // Add the interaction to history
+          const interactionText = `${responseText}\n\nObservation: ${observation}\n\n`;
+          history.push(new AIMessage(interactionText));
+
+          // Continue to next iteration
+          ws.send(JSON.stringify({
+            type: "agent-step",
+            step: "thinking",
+            content: "Processing results..."
+          }));
+
+        } catch (toolError: any) {
+          console.error(`Tool error:`, toolError.message);
+
+          const errorObs = `Error: ${toolError.message}`;
+
+          ws.send(JSON.stringify({
+            type: "tool-error",
+            toolName: action,
+            error: errorObs,
+            toolId: `react-${iteration}`
+          }));
+
+          // Add error to history so model can recover
+          const interactionText = `${responseText}\n\nObservation: ${errorObs}\n\n`;
+          history.push(new AIMessage(interactionText));
         }
+
+      } else {
+        // Model didn't provide valid ReACT format, stream response as-is
+        console.log("No valid action found, streaming response");
+
+        ws.send(JSON.stringify({ type: "stream-start" }));
+
+        const words = responseText.split(" ");
+        for (let i = 0; i < words.length; i += 10) {
+          const chunk = words.slice(i, i + 10).join(" ") + " ";
+          ws.send(JSON.stringify({
+            type: "stream-chunk",
+            content: chunk
+          }));
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+
+        ws.send(JSON.stringify({ type: "stream-end" }));
+
+        history.push(new AIMessage(responseText));
+        sessions.set(sessionId, history);
+        break;
       }
+    }
 
-      // Get final response after tool execution
-      ws.send(JSON.stringify({ type: "stream-start" }));
-
-      const stream = await model.stream(history);
-      let fullResponse = "";
-
-      for await (const chunk of stream) {
-        const content = chunk.content.toString();
-        fullResponse += content;
-
-        ws.send(JSON.stringify({
-          type: "stream-chunk",
-          content: content
-        }));
-      }
-
-      ws.send(JSON.stringify({ type: "stream-end" }));
-
-      history.push(new AIMessage(fullResponse));
-      sessions.set(sessionId, history);
-
-    } else {
-      // No tool calls, stream the response directly
-      ws.send(JSON.stringify({ type: "stream-start" }));
-
-      const stream = await model.stream(history);
-      let fullResponse = "";
-
-      for await (const chunk of stream) {
-        const content = chunk.content.toString();
-        fullResponse += content;
-
-        ws.send(JSON.stringify({
-          type: "stream-chunk",
-          content: content
-        }));
-      }
-
-      ws.send(JSON.stringify({ type: "stream-end" }));
-
-      history.push(new AIMessage(fullResponse));
-      sessions.set(sessionId, history);
+    if (iteration >= MAX_ITERATIONS) {
+      ws.send(JSON.stringify({
+        type: "error",
+        content: "Maximum iteration limit reached. Please try rephrasing your question."
+      }));
     }
 
   } catch (error: any) {
+    console.error("executeResponse error:", error);
     ws.send(JSON.stringify({
       type: "error",
       content: `Error: ${error.message}`,
@@ -462,9 +671,10 @@ server.listen(PORT, () => {
 ║                                                ║
 ║   Features:                                    ║
 ║   ✓ Request classification                    ║
-║   ✓ Planning & reasoning                      ║
-║   ✓ Streaming responses                       ║
-║   ✓ User confirmation                         ║
+║   ✓ Auto-approved planning                    ║
+║   ✓ ReACT agent with tools                    ║
+║   ✓ Optimized streaming                       ║
+║   ✓ LRU search caching                        ║
 ║                                                ║
 ║   Press Ctrl+C to stop                         ║
 ║                                                ║

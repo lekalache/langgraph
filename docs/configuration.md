@@ -1,32 +1,77 @@
-# OpenRouter Configuration Guide
+# Configuration Guide
 
-This project is configured to use [OpenRouter](https://openrouter.ai/), which provides unified access to multiple AI models including many free options.
+This project uses two main services:
+1. **OpenRouter** - For LLM access (free models available)
+2. **Tavily** - For AI-optimized web search
 
-## Current Setup
+## Required API Keys
 
-The project is currently configured to use:
-- **Model**: `tngtech/deepseek-r1t2-chimera:free`
-- **API Endpoint**: `https://openrouter.ai/api/v1`
-- **API Key**: Set in `.env` file
+Create a `.env` file in the project root with:
 
-## Why OpenRouter?
+```env
+# OpenRouter API (for LLM access)
+OPENAI_API_KEY=sk-or-v1-...
+OPENROUTER_API_KEY=sk-or-v1-...
+
+# Tavily API (for web search)
+TAVILY_API_KEY=tvly-dev-...
+```
+
+## 1. OpenRouter Setup (LLM)
+
+### Why OpenRouter?
 
 1. **Free Models**: Access to powerful free AI models
 2. **Multiple Providers**: Switch between models without code changes
 3. **Unified API**: Compatible with OpenAI SDK
 4. **No Vendor Lock-in**: Easy to switch providers
 
-## Getting Your API Key
+### Getting Your OpenRouter API Key
 
 1. Visit [OpenRouter](https://openrouter.ai/)
 2. Sign up for a free account
 3. Go to [Keys](https://openrouter.ai/keys)
 4. Generate a new API key
-5. Add it to your `.env` file:
-   ```
-   OPENAI_API_KEY=sk-or-v1-...
-   OPENROUTER_API_KEY=sk-or-v1-...
-   ```
+5. Copy the key (starts with `sk-or-v1-...`)
+6. Add to `.env` file
+
+### Current Model
+
+- **Model**: `tngtech/deepseek-r1t2-chimera:free`
+- **API Endpoint**: `https://openrouter.ai/api/v1`
+- **Configured in**: `src/core/config.ts`
+
+## 2. Tavily Setup (Web Search)
+
+### Why Tavily?
+
+1. **AI-Optimized**: Built specifically for AI agents
+2. **High-Quality Results**: Better than generic search APIs
+3. **AI Summaries**: Includes AI-generated answer summaries
+4. **Fast**: Optimized for agent use cases
+5. **Free Tier**: 1,000 searches/month free
+
+### Getting Your Tavily API Key
+
+1. Visit [Tavily](https://tavily.com)
+2. Sign up for a free account
+3. Go to dashboard
+4. Copy your API key (starts with `tvly-dev-...` or `tvly-...`)
+5. Add to `.env` file
+
+### Tavily Configuration
+
+```typescript
+// src/core/tools.ts
+const tavilyClient = tavily({ apiKey: process.env.TAVILY_API_KEY });
+
+const response = await tavilyClient.search(query, {
+  maxResults: 10,           // Number of results
+  includeAnswer: true,      // Include AI summary
+  includeRawContent: false, // Don't include full HTML
+  searchDepth: "advanced",  // Deep search mode
+});
+```
 
 ## Changing Models
 
